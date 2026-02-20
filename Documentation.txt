@@ -1,0 +1,275 @@
+# Library Management System - Development Documentation
+
+## Project Overview
+This document summarizes the development of a **Library Management System** implemented in C++ using object-oriented programming principles. The system manages library items (books, magazines, DVDs), patrons (students, faculty), and transactions (checkouts, returns).
+
+---
+
+## Initial Requirements & Prompts
+
+### Prompt 1: Full Implementation Request
+**User Request:**
+> "Can you access all the header files and implement their classes with all the methods in the main.cpp file?"
+
+**AI Response:**
+Provided a comprehensive single-file implementation including:
+- Exception hierarchy (LibraryException, ItemNotFoundException, PatronNotFoundException, CheckoutException, ReturnException)
+- Base class `LibraryItem` with derived classes: `Book`, `Magazine`, `DVD`
+- Base class `LibraryPatron` with derived classes: `Student`, `Faculty`
+- Transaction classes: `Checkout` and `Return`
+- Main `Library` management class with full CRUD and search functionality
+- Unit test framework with comprehensive test cases
+- Demo code showing all features in action
+
+**Key Features Implemented:**
+- Item checkout and return with fine calculation
+- Patron account management
+- Search functionality (by title, author, genre, type)
+- Transaction history tracking
+- Overdue item detection
+- Custom exception handling
+
+---
+
+## Debugging Process
+
+### Error 1: Type Mismatch - shared_ptr to unique_ptr Conversion
+
+**Error Message:**
+```
+Main.cpp:508:32: error: no matching function for call to 
+'std::vector<std::unique_ptr<Transaction> >::push_back(std::shared_ptr<Checkout>&)'
+```
+
+**Root Cause:**
+The code attempted to store `shared_ptr<Checkout>` objects in a vector of `unique_ptr<Transaction>`. These pointer types are incompatible and cannot be implicitly converted.
+
+**Initial Issue:**
+- Line 508: `transactions_.push_back(checkout);` where checkout was `shared_ptr<Checkout>`
+- Line 521: `transactions_.push_back(ret);` where ret was `shared_ptr<Return>`
+
+**First Attempted Fix (Incorrect):**
+Changed transaction storage and return types to use `unique_ptr`, but this created new problems:
+- Unable to properly manage lifetime of transaction objects
+- Loss of polymorphic behavior when converting derived to base class
+
+**Solution Applied:**
+Reverted to use `shared_ptr` for active checkouts and utilized copy constructors to create base class pointers for storage:
+```cpp
+auto checkout = std::make_shared<Checkout>(itemPtr, patronPtr, item->getMaxLoanDays());
+activeCheckouts_[itemId] = checkout;
+transactions_.push_back(std::make_unique<Checkout>(*checkout));
+```
+
+### Error 2: Incorrect Function Signature
+
+**Error Message:**
+```
+Main.cpp:796:27: error: no matching function for call to 'Library::returnItem(const char [5], const char [5])'
+note: candidate 1: 'std::shared_ptr<Return> Library::returnItem(const std::string&)'
+note: expects 1 argument, 2 provided
+```
+
+**Root Cause:**
+The `returnItem()` function was designed to take only an `itemId` parameter, but the demo code attempted to pass both `itemId` and `patronId`.
+
+**Why Only itemId?**
+- The item being returned is uniquely identified by its ID
+- The patron information is already stored in the `Checkout` object associated with that item
+- Passing patronId was redundant and could create consistency issues
+
+**Fix Applied:**
+Changed demo code from:
+```cpp
+library.returnItem("B001", "S001");  // WRONG
+```
+
+To:
+```cpp
+auto returnTxn = library.returnItem("B001");  // CORRECT
+```
+
+### Error 3: Constructor Type Mismatch
+
+**Error Message:**
+```
+Main.cpp:520:44: error: no matching function for call to 'Return::Return(std::unique_ptr<Checkout>&)'
+note: candidate 1: 'Return::Return(std::shared_ptr<Checkout>)'
+note: no known conversion for argument 1 from 'std::unique_ptr<Checkout>' to 'std::shared_ptr<Checkout>'
+```
+
+**Root Cause:**
+Attempted to initialize `Return` with a `unique_ptr<Checkout>`, but the constructor expected `shared_ptr<Checkout>`.
+
+**Why shared_ptr for Checkout?**
+- Checkout objects are referenced by both the Library's activeCheckouts map and the Transaction history
+- Shared ownership prevents premature deletion
+- Enables safe access from multiple contexts
+
+**Fix Applied:**
+Kept `activeCheckouts_` as `map<string, shared_ptr<Checkout>>` and properly initialized Return objects:
+```cpp
+auto ret = std::make_shared<Return>(it->second);
+transactions_.push_back(std::make_unique<Return>(*ret));
+```
+
+---
+
+## Final Architecture
+
+### Class Hierarchy
+
+```
+LibraryException (base exception)
+├── ItemNotFoundException
+├── PatronNotFoundException
+├── CheckoutException
+└── ReturnException
+
+LibraryItem (abstract base class)
+├── Book
+├── Magazine
+└── DVD
+
+LibraryPatron (abstract base class)
+├── Student
+└── Faculty
+
+Transaction (abstract base class)
+├── Checkout
+└── Return
+
+Library (main management class)
+```
+
+### Key Design Decisions
+
+1. **Polymorphism**: Base classes use virtual methods for type-specific behavior
+2. **Exception Safety**: Custom exception hierarchy for precise error handling
+3. **Memory Management**: 
+   - `unique_ptr` for single-ownership objects (items, patrons stored in Library)
+   - `shared_ptr` for shared-ownership objects (active checkouts)
+4. **Separation of Concerns**: Each class has a single, well-defined responsibility
+5. **Search Flexibility**: Multiple search methods + generic predicate-based search
+
+### Public Interface Methods
+
+#### Library Class
+- `void addItem(unique_ptr<LibraryItem>)` - Add item to catalog
+- `void addPatron(unique_ptr<LibraryPatron>)` - Register patron
+- `shared_ptr<Checkout> checkoutItem(itemId, patronId)` - Checkout an item
+- `shared_ptr<Return> returnItem(itemId)` - Return an item
+- `vector<const LibraryItem*> searchItemsByTitle/Author/Genre/Type()`
+- `vector<const LibraryItem*> searchItems(predicate)` - Generic search
+- `void printInventory()` - Display all items
+- `void printOverdueItems()` - List overdue items with fines
+- `void printPatronHistory(patronId)` - Show patron transaction history
+
+#### Item Classes
+- `checkOut()` - Mark item as unavailable
+- `returnItem()` - Mark item as available
+- `calculateFine(daysOverdue)` - Compute fine for late return
+- `double dailyFine_` - Different rates per item type:
+  - Book: $0.50/day (21-day loan)
+  - Magazine: $0.25/day (14-day loan)
+  - DVD: $1.00/day (7-day loan)
+
+#### Patron Classes
+- `getLoanExtensionDays()` - Extension period allowed:
+  - Student: 7 days (max 5 items)
+  - Faculty: 14 days (max 10 items)
+
+---
+
+## Testing
+
+### Unit Tests Implemented
+1. **Create Book** - Validates book object creation and properties
+2. **Create Magazine** - Validates magazine object creation
+3. **Create DVD** - Validates DVD object creation
+4. **Create Student** - Validates student patron creation and limits
+5. **Create Faculty** - Validates faculty patron creation and limits
+6. **Library Checkout** - Tests successful checkout operation
+7. **Item Not Found Exception** - Verifies correct exception thrown
+8. **Patron Not Found Exception** - Verifies correct exception thrown
+9. **Fine Calculation** - Validates fine computation logic
+
+### Test Results Framework
+Simple `UnitTest` class provides:
+- `test<Func>(name, func)` - Run individual test
+- `printSummary()` - Display passed/failed count
+- Exception safety with detailed error messages
+
+---
+
+## Code Statistics
+
+- **Total Lines**: ~800
+- **Classes**: 20+
+- **Virtual Methods**: 12+
+- **Exception Types**: 5
+- **Test Cases**: 9
+- **Search Methods**: 5
+
+---
+
+## Lessons Learned
+
+### Smart Pointer Management
+- **unique_ptr**: Best for exclusive ownership (most items and patrons)
+- **shared_ptr**: Needed for objects with multiple references (active checkouts)
+- **Copy semantics**: Can copy unique/shared pointer objects to bridge types
+
+### Virtual Method Design
+- Ensure base classes define clear contracts
+- Use `override` keyword (implicitly in this code, should be explicit in production)
+- Handle polymorphic behavior in derived classes consistently
+
+### Exception Handling
+- Create hierarchy of exceptions for precise error handling
+- Provide meaningful error messages with context
+- Catch specific exceptions in calling code
+
+### API Design
+- Functions should take only necessary parameters
+- Redundant parameters (like patronId in returnItem) indicate design issues
+- Prefer implicit relationships over explicit parameter passing
+
+---
+
+## Future Enhancements
+
+1. **Persistence**: Add file I/O for saving/loading library state
+2. **Database Integration**: Use SQLite or similar for scalability
+3. **Notifications**: Email/SMS alerts for overdue items
+4. **Reservations**: Allow patrons to reserve checked-out items
+5. **Multi-user**: Add authentication and permission system
+6. **Analytics**: Track borrowing patterns, popular items
+7. **GUI**: Implement user interface (Qt, wxWidgets)
+8. **Concurrency**: Add thread safety for multi-user access
+
+---
+
+## Compilation
+
+**Compiler**: MinGW-w64 (GCC 15.2.0)
+**Standard**: C++17
+**Flags Recommended**: `-std=c++17 -Wall -Wextra`
+
+**Compile Command:**
+```bash
+g++ -std=c++17 -Wall -Wextra Main.cpp -o LibrarySystem.exe
+```
+
+---
+
+## Conclusion
+
+The Library Management System demonstrates solid C++ OOP principles including:
+- Inheritance and polymorphism
+- Exception handling
+- Smart pointer memory management
+- Object composition
+- Design patterns (Factory pattern implicit in Library class)
+
+All compilation errors were resolved through understanding C++ type system constraints and making appropriate design decisions based on object ownership and lifetime requirements.
